@@ -271,7 +271,27 @@ export const KiroConfigSchema = z.object({
    * When true (default), maps budget ranges to effort levels.
    * When false, only uses explicit effort config or falls back to 'medium'.
    */
-  auto_effort_mapping: z.boolean().default(true)
+  auto_effort_mapping: z.boolean().default(true),
+
+  /**
+   * Transport used to talk to Kiro.
+   * - 'http' (default): the multi-account HTTP pipeline (account DB, quota
+   *   avoidance, stream recovery, token refresh).
+   * - 'acp': drive a local `kiro-cli acp` subprocess over stdio. This is a
+   *   single-account resilience fallback: authentication is delegated entirely
+   *   to kiro-cli, so it bypasses the account repository, selector, token
+   *   refresher and request handler. Can also be forced with the KIRO_TRANSPORT
+   *   env var.
+   */
+  transport: z.enum(['http', 'acp']).default('http'),
+
+  /**
+   * When the ACP transport is used, auto-approve every tool-permission request
+   * from kiro-cli (`--trust-all-tools`). Can also be forced with the
+   * KIRO_ACP_TRUST_TOOLS=1 env var. Only tools exposed by the OpenCode bridge
+   * are approved automatically when this is false.
+   */
+  trust_acp_tools: z.boolean().default(false)
 })
 
 export type KiroConfig = z.infer<typeof KiroConfigSchema>
@@ -316,5 +336,7 @@ export const DEFAULT_CONFIG: KiroConfig = {
   log_compress_after_days: 1,
   log_segment_size_mb: 16,
   enable_log_effort_debug: false,
-  auto_effort_mapping: true
+  auto_effort_mapping: true,
+  transport: 'http',
+  trust_acp_tools: false
 }

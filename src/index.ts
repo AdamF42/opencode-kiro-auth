@@ -1,6 +1,7 @@
 import { Plugin } from '@opencode/plugin'
 import type { Context } from '@opencode/plugin/promise/plugin'
 import { KiroOAuthPlugin } from './plugin.js'
+import { createKiroAcpLanguageModel } from './plugin/acp/acp-sdk.js'
 import {
   createKiroCore,
   disposeActiveKeepAliveController,
@@ -134,25 +135,53 @@ const setup = async (ctx: Context) => {
     { providerID: PROVIDER_ID }
   )
 
+  // Transport selection. The default `http` transport routes every request
+  // through the shared multi-account Kiro request pipeline. The opt-in `acp`
+  // transport instead drives the local `kiro-cli acp` process over stdio: it is
+  // a single-account fallback that delegates auth entirely to kiro-cli and
+  // bypasses the account DB / selector / token-refresher / request pipeline. It
+  // is resilient to future HTTP API/version gates because it rides the
+  // officially maintained CLI.
+  const transport = core.config.transport ?? (process.env.KIRO_TRANSPORT === 'acp' ? 'acp' : 'http')
+  const trustAcpTools =
+    core.config.trust_acp_tools === true || process.env.KIRO_ACP_TRUST_TOOLS === '1'
+
   // Interception point: supply a LanguageModelV3 that routes through the shared
   // Kiro request pipeline. This replaces the v1 custom-fetch on the auth loader.
   // No `resolveCallContext` is passed: the adapter's fallback reads the private
   // headers the `model.request` hook stamped above (forwarded by the host onto
   // the call options) and re-emits that identical channel into the synthesized
   // request, so `buildPrivateHeaders` stays the single source of truth.
-  const languageRegistration = await ctx.aisdk.hook(
-    'language',
-    (event) => {
-      event.language = createKiroLanguageModel({
-        providerID: PROVIDER_ID,
-        modelID: String(event.model.modelID),
-        baseURL: core.baseURL,
-        pipeline: core.requestHandler,
-        showToast
-      })
-    },
-    { providerID: PROVIDER_ID }
-  )
+  const languageRegistration =
+    transport === 'acp'
+      ? await ctx.aisdk.hook(
+          'language',
+          (event) => {
+            // The ACP model declares its own structural V3 types (no runtime
+            // @ai-sdk/provider dependency), so cast to the host's expected type.
+            event.language = createKiroAcpLanguageModel({
+              providerID: PROVIDER_ID,
+              modelID: String(event.model.modelID),
+              effort: core.config.effort,
+              cwd: ctx.location.directory,
+              trustTools: trustAcpTools
+            }) as unknown as typeof event.language
+          },
+          { providerID: PROVIDER_ID }
+        )
+      : await ctx.aisdk.hook(
+          'language',
+          (event) => {
+            event.language = createKiroLanguageModel({
+              providerID: PROVIDER_ID,
+              modelID: String(event.model.modelID),
+              baseURL: core.baseURL,
+              pipeline: core.requestHandler,
+              showToast
+            })
+          },
+          { providerID: PROVIDER_ID }
+        )
 
   return async () => {
     await modelRequestRegistration.dispose()
