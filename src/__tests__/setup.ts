@@ -17,3 +17,12 @@ const testHome =
 
 process.env.XDG_CONFIG_HOME = testHome
 if (process.platform === 'win32') process.env.APPDATA = testHome
+
+// `writeToKiroCli()` (src/plugin/sync/kiro-cli.ts) mirrors refreshed tokens into
+// the kiro-cli SQLite database. Tests exercise the real AccountManager refresh
+// path, so without this pin a test run would overwrite the developer's live
+// credentials in ~/.local/share/kiro-cli/data.sqlite3. Pin it to a throwaway
+// file too, exactly like the opencode config home above.
+if (!process.env.KIROCLI_DB_PATH) {
+  process.env.KIROCLI_DB_PATH = join(testHome, 'kiro-cli-data.sqlite3')
+}

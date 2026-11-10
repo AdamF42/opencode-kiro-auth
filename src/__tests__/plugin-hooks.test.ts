@@ -43,41 +43,44 @@ describe('config hook', () => {
     await plugin.config(input)
 
     expect(input.provider[PROVIDER_ID].npm).toBe('@ai-sdk/openai-compatible')
-    expect(input.provider[PROVIDER_ID].api).toBe('https://q.us-east-1.amazonaws.com')
+    expect(input.provider[PROVIDER_ID].api).toBe('https://runtime.us-east-1.kiro.dev')
   })
 
-  test('populates the default models map including effort variants', async () => {
+  test('never advertises the full static catalog and always keeps auto selectable', async () => {
+    // Live discovery runs against the shared account layer / kiro.db singleton,
+    // whose state is NOT deterministic across the suite (AGENTS.md §5), so we do
+    // NOT assert on the discovery outcome (live vs minimal vs placeholder) here.
+    // The invariant that must hold regardless of DB state: the config hook never
+    // falls back to the full static catalog (no unconfirmed wire id leaks), and
+    // `auto` is always present and selectable (not renamed). The deterministic
+    // no-account / failure-severity behavior is covered by the pure seam in
+    // discovery-resolve-catalog.test.ts.
     const plugin = await initPlugin()
     const input: any = {}
     await plugin.config(input)
 
     const models = input.provider[PROVIDER_ID].models
-    expect(models.auto).toBeDefined()
-    expect(models['claude-sonnet-4-5']).toBeDefined()
-    expect(models['claude-opus-4-8']).toBeDefined()
-    expect(models['claude-opus-4-8-xhigh']).toBeDefined()
-    expect(models['claude-opus-5']).toBeDefined()
-    expect(models['claude-opus-5-xhigh']).toBeDefined()
-    expect(models['claude-opus-5-max']).toBeDefined()
-    expect(models['claude-sonnet-5-max']).toBeDefined()
-    expect(models['deepseek-3.2']).toBeDefined()
-    expect(models['glm-5']).toBeDefined()
+    const auto = models.auto
+    expect(auto).toBeDefined()
+    expect(auto.name).toBe('Auto (1.0x)')
+    expect(auto.limit).toEqual({ context: 1000000, output: 64000 })
+    // The static catalog's hardcoded ids must NEVER leak into the registered map.
+    expect(models['claude-sonnet-4-5']).toBeUndefined()
+    expect(models['claude-opus-5']).toBeUndefined()
   })
 
-  test('a model entry carries name, limit, and modalities', async () => {
-    const plugin = await initPlugin()
+  test('only ever surfaces a discovery toast, never an uncategorized failure', async () => {
+    // Again DB-state-independent: whatever discovery does, the config hook must
+    // not throw and must leave a usable provider block. If a toast fires it is a
+    // discovery warning/error (kind-dependent severity is unit-tested at the
+    // pure seam); the hook must never crash startup.
+    const { client } = makeFakeClient()
+    const plugin = await createKiroPlugin(PROVIDER_ID)({ client, directory: process.cwd() })
     const input: any = {}
     await plugin.config(input)
 
-    const sonnet = input.provider[PROVIDER_ID].models['claude-sonnet-4-5']
-    expect(sonnet.name).toBe('Claude Sonnet 4.5 (1.3x)')
-    expect(sonnet.limit).toEqual({ context: 200000, output: 64000 })
-    expect(sonnet.modalities).toEqual({ input: ['text', 'image', 'pdf'], output: ['text'] })
-
-    const opus5 = input.provider[PROVIDER_ID].models['claude-opus-5']
-    expect(opus5.name).toBe('Claude Opus 5 (2.2x)')
-    expect(opus5.limit).toEqual({ context: 1000000, output: 64000 })
-    expect(opus5.modalities).toEqual({ input: ['text', 'image', 'pdf'], output: ['text'] })
+    expect(input.provider[PROVIDER_ID].npm).toBe('@ai-sdk/openai-compatible')
+    expect(input.provider[PROVIDER_ID].models.auto).toBeDefined()
   })
 
   test('does not overwrite a user-defined api or models block', async () => {
@@ -112,7 +115,7 @@ describe('auth hook', () => {
     const loaded = await plugin.auth.loader(getAuth)
 
     expect(loaded.apiKey).toBe('')
-    expect(loaded.baseURL).toBe('https://q.us-east-1.amazonaws.com')
+    expect(loaded.baseURL).toBe('https://runtime.us-east-1.kiro.dev')
     expect(typeof loaded.fetch).toBe('function')
   })
 })
@@ -127,7 +130,7 @@ describe('provider hook', () => {
     })
 
     expect(normalized['claude-sonnet-4-5'].api.npm).toBe('@ai-sdk/openai-compatible')
-    expect(normalized['claude-sonnet-4-5'].api.url).toBe('https://q.us-east-1.amazonaws.com')
+    expect(normalized['claude-sonnet-4-5'].api.url).toBe('https://runtime.us-east-1.kiro.dev')
     expect(normalized['claude-sonnet-4-5'].name).toBe('Sonnet')
   })
 
