@@ -35,12 +35,12 @@ describe('context-window SSOT: getContextWindowSize matches advertised limit.con
 })
 
 describe('context-window: effort/thinking suffixes resolve to the base limit', () => {
-  test('gpt-5.6-sol family is 272000, suffix-independent', () => {
-    expect(getContextWindowSize('gpt-5.6-sol')).toBe(272000)
-    expect(getContextWindowSize('gpt-5.6-sol-max')).toBe(272000)
+  test('gpt-5.6-sol family is 986000, suffix-independent', () => {
+    expect(getContextWindowSize('gpt-5.6-sol')).toBe(986000)
+    expect(getContextWindowSize('gpt-5.6-sol-max')).toBe(986000)
     expect(getContextWindowSize('gpt-5.6-sol-xhigh')).toBe(getContextWindowSize('gpt-5.6-sol'))
-    expect(getContextWindowSize('gpt-5.6-terra-high')).toBe(272000)
-    expect(getContextWindowSize('gpt-5.6-luna-low')).toBe(272000)
+    expect(getContextWindowSize('gpt-5.6-terra-high')).toBe(986000)
+    expect(getContextWindowSize('gpt-5.6-luna-low')).toBe(986000)
   })
 
   test('claude opus/sonnet long-context families are 1000000, suffix-independent', () => {
@@ -54,10 +54,19 @@ describe('context-window: effort/thinking suffixes resolve to the base limit', (
     expect(getContextWindowSize('claude-sonnet-4-6-medium')).toBe(1000000)
   })
 
+  test('claude 5.5 family is 1000000, suffix-independent', () => {
+    expect(getContextWindowSize('claude-opus-5-5')).toBe(1000000)
+    expect(getContextWindowSize('claude-opus-5-5-max')).toBe(1000000)
+    expect(getContextWindowSize('claude-opus-5-5-thinking')).toBe(1000000)
+    expect(getContextWindowSize('claude-sonnet-5-5')).toBe(1000000)
+    expect(getContextWindowSize('claude-sonnet-5-5-xhigh')).toBe(1000000)
+    expect(getContextWindowSize('claude-haiku-5-5')).toBe(1000000)
+  })
+
   test('standard-context and open-weight bases keep their advertised sizes', () => {
     expect(getContextWindowSize('claude-sonnet-4-5')).toBe(200000)
     expect(getContextWindowSize('claude-haiku-4-5')).toBe(200000)
-    expect(getContextWindowSize('auto')).toBe(200000)
+    expect(getContextWindowSize('auto')).toBe(1000000)
     expect(getContextWindowSize('deepseek-3.2')).toBe(128000)
     expect(getContextWindowSize('qwen3-coder-next')).toBe(256000)
     expect(getContextWindowSize('glm-5')).toBe(200000)

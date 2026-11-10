@@ -1,5 +1,10 @@
 import { CodeWhispererStreamingClient } from '@aws/codewhisperer-streaming-client'
 import { KIRO_CONSTANTS } from '../constants.js'
+import { getDiscoveredEffort } from './discovery/catalog.js'
+import {
+  buildEffortRequestFields as buildDiscoveredEffortFields,
+  resolveEffortLevel
+} from './discovery/effort.js'
 import { buildEffortRequestFields } from './effort.js'
 import type { Effort, KiroAuthDetails } from './types'
 
@@ -44,12 +49,35 @@ export function injectEffortIntoSerializedBody(body: unknown, effort: Effort): u
   try {
     const parsedBody = JSON.parse(bodyText)
     const wireModel = parsedBody?.conversationState?.currentMessage?.userInputMessage?.modelId
-    parsedBody.additionalModelRequestFields = buildEffortRequestFields(wireModel, effort)
+    parsedBody.additionalModelRequestFields = resolveEffortRequestFields(wireModel, effort)
     const serializedBody = JSON.stringify(parsedBody)
     return encodeAsBytes ? UTF8_ENCODER.encode(serializedBody) : serializedBody
   } catch {
     return body
   }
+}
+
+/**
+ * Choose the effort request-field payload for a wire model.
+ *
+ * Prefers the per-model schema learned during discovery: it clamps the
+ * requested effort to a level the model actually advertises (via
+ * {@link resolveEffortLevel}) and emits the field shape that model's schema
+ * declares. When discovery has not seen the model, falls back to the static,
+ * probe-confirmed {@link buildEffortRequestFields}. The discovered schema is
+ * advisory only, so an absent or non-rankable level never blocks the request.
+ */
+function resolveEffortRequestFields(wireModel: unknown, effort: Effort): Record<string, unknown> {
+  if (typeof wireModel === 'string') {
+    const discovered = getDiscoveredEffort(wireModel)
+    if (discovered !== undefined) {
+      const level = resolveEffortLevel(discovered, effort)
+      if (level !== undefined) {
+        return buildDiscoveredEffortFields(level, discovered.schemaPath)
+      }
+    }
+  }
+  return buildEffortRequestFields(wireModel as string, effort)
 }
 
 export function createSdkClient(
@@ -74,7 +102,7 @@ export function createSdkClient(
   const token = auth.access
   const client = new CodeWhispererStreamingClient({
     region,
-    endpoint: `https://q.${region}.amazonaws.com`,
+    endpoint: `https://runtime.${region}.kiro.dev`,
     token: () => Promise.resolve({ token }),
     maxAttempts: KIRO_CLI_MAX_ATTEMPTS,
     retryMode: 'standard',

@@ -60,7 +60,11 @@ export function supportsXHighEffort(kiroModel: string): boolean {
  * GPT and Claude take effort through different, mutually-exclusive wire fields
  * (each rejects the other's with HTTP 400, probe-confirmed):
  * - GPT (Mantle):  `reasoning.effort`
- * - Claude:        `output_config.effort`
+ * - Claude:        `output_config.effort` alongside the adaptive `thinking`
+ *   block. The `thinking` block is what makes Claude actually emit a
+ *   `reasoningContentEvent` run; `output_config.effort` alone yields an empty,
+ *   near-instant "thought" with no visible reasoning. This mirrors kiro-cli and
+ *   the discovery-path builder (src/plugin/discovery/effort.ts).
  */
 export function buildEffortRequestFields(
   kiroModel: string,
@@ -69,7 +73,10 @@ export function buildEffortRequestFields(
   if (GPT_REASONING_MODELS.has(kiroModel)) {
     return { reasoning: { effort } }
   }
-  return { output_config: { effort } }
+  return {
+    thinking: { type: 'adaptive', display: 'summarized' },
+    output_config: { effort }
+  }
 }
 
 /**

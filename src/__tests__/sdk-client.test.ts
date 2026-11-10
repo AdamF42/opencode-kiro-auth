@@ -1,5 +1,6 @@
 import { GenerateAssistantResponseCommand } from '@aws/codewhisperer-streaming-client'
 import { describe, expect, test } from 'bun:test'
+import { clearDiscoveredEffort, recordDiscoveredEffort } from '../plugin/discovery/catalog'
 import {
   clearSdkClientCache,
   createSdkClient,
@@ -40,6 +41,7 @@ describe('SDK client', () => {
 
     expect(typeof updated).toBe('string')
     expect(JSON.parse(updated as string).additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
       output_config: { effort: 'max' }
     })
   })
@@ -52,6 +54,7 @@ describe('SDK client', () => {
     expect(updated).not.toBe(requestBytes)
     const parsed = JSON.parse(new TextDecoder().decode(updated as Uint8Array))
     expect(parsed.additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
       output_config: { effort: 'high' }
     })
   })
@@ -63,6 +66,50 @@ describe('SDK client', () => {
     for (const body of bodies) {
       expect(injectEffortIntoSerializedBody(body, 'low')).toBe(body)
     }
+  })
+
+  test('prefers a discovered per-model effort schema, clamping the requested level', () => {
+    // A GPT-style model advertised via discovery supports only low/high and
+    // uses the reasoning.effort shape; a requested 'max' clamps to 'high'.
+    const wireModel = 'discovered-reasoning-model'
+    recordDiscoveredEffort([
+      {
+        modelId: wireModel,
+        additionalModelRequestFieldsSchema: {
+          type: 'object',
+          properties: {
+            reasoning: {
+              type: 'object',
+              properties: { effort: { enum: ['low', 'high'] } }
+            }
+          }
+        }
+      }
+    ])
+
+    try {
+      const body = JSON.stringify({
+        conversationState: { currentMessage: { userInputMessage: { modelId: wireModel } } }
+      })
+      const updated = injectEffortIntoSerializedBody(body, 'max')
+      expect(JSON.parse(updated as string).additionalModelRequestFields).toEqual({
+        reasoning: { effort: 'high' }
+      })
+    } finally {
+      clearDiscoveredEffort()
+    }
+  })
+
+  test('falls back to the static effort shape when discovery has not seen the model', () => {
+    clearDiscoveredEffort()
+    const body = JSON.stringify({
+      conversationState: { currentMessage: { userInputMessage: { modelId: 'claude-opus-4.7' } } }
+    })
+    const updated = injectEffortIntoSerializedBody(body, 'high')
+    expect(JSON.parse(updated as string).additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: 'high' }
+    })
   })
 
   test('uses Kiro CLI-style standard SDK retries for throttling', async () => {

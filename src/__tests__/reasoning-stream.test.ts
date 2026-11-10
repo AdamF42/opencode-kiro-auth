@@ -102,6 +102,64 @@ describe('transformSdkStream reasoningContentEvent handling', () => {
     const anyContent = chunks.some((c) => contentTextOf(c) !== undefined)
     expect(anyContent).toBe(false)
   })
+
+  test('trivial reasoning stub before content is suppressed (no empty Thought)', async () => {
+    // `auto` emits a tiny punctuation stub while narrating the real reasoning as
+    // plain content. The stub must NOT open a thinking block.
+    const events = [
+      { reasoningContentEvent: { text: '...' } },
+      { assistantResponseEvent: { content: 'Reasoning: 1. foo 2. bar' } },
+      { assistantResponseEvent: { content: ' Answer: 42' } }
+    ]
+
+    const chunks = await collectChunks(events)
+
+    const anyReasoning = chunks.some((c) => reasoningTextOf(c) !== undefined)
+    expect(anyReasoning).toBe(false)
+
+    const content = chunks
+      .filter((c) => contentTextOf(c) !== undefined)
+      .map((c) => contentTextOf(c))
+      .join('')
+    expect(content).toBe('Reasoning: 1. foo 2. bar Answer: 42')
+  })
+
+  test('trivial reasoning-only stub emits nothing on the reasoning channel', async () => {
+    const events = [
+      { reasoningContentEvent: { text: '.' } },
+      { reasoningContentEvent: { text: '..' } }
+    ]
+
+    const chunks = await collectChunks(events)
+
+    const anyReasoning = chunks.some((c) => reasoningTextOf(c) !== undefined)
+    expect(anyReasoning).toBe(false)
+  })
+
+  test('reasoning that only becomes meaningful after a stub still surfaces in full', async () => {
+    // First delta is a bare stub; the run becomes meaningful on the second delta.
+    // The buffered stub must be flushed together with the meaningful text so no
+    // reasoning is lost.
+    const events = [
+      { reasoningContentEvent: { text: '... ' } },
+      { reasoningContentEvent: { text: 'actually reasoning now' } },
+      { assistantResponseEvent: { content: 'done' } }
+    ]
+
+    const chunks = await collectChunks(events)
+
+    const reasoning = chunks
+      .filter((c) => reasoningTextOf(c) !== undefined)
+      .map((c) => reasoningTextOf(c))
+      .join('')
+    expect(reasoning).toBe('... actually reasoning now')
+
+    const content = chunks
+      .filter((c) => contentTextOf(c) !== undefined)
+      .map((c) => contentTextOf(c))
+      .join('')
+    expect(content).toBe('done')
+  })
 })
 
 describe('ResponseHandler non-streaming reasoningContentEvent collection', () => {

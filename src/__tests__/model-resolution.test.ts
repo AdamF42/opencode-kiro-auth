@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { SUPPORTED_MODELS } from '../constants.js'
-import { resolveKiroModel } from '../plugin/models.js'
+import { clearDiscoveredWireIds, recordDiscoveredWireIds } from '../plugin/discovery/catalog.js'
+import { resolveKiroModel, resolveModelVariant } from '../plugin/models.js'
 
 describe('resolveKiroModel', () => {
   test('resolves newly advertised model slugs', () => {
@@ -94,5 +95,38 @@ describe('resolveKiroModel', () => {
     expect(() => resolveKiroModel('this-model-does-not-exist')).toThrow(
       'Unsupported model: this-model-does-not-exist'
     )
+  })
+
+  test('passes through a known wire id unchanged (discovery registers raw wire ids)', () => {
+    // MODEL_MAPPING values (wire ids) are not themselves keys; the chat path
+    // must accept an already-resolved wire id instead of throwing.
+    expect(resolveKiroModel('claude-sonnet-4.5')).toBe('claude-sonnet-4.5')
+    expect(resolveKiroModel('claude-opus-4.8')).toBe('claude-opus-4.8')
+    expect(resolveKiroModel('claude-haiku-4.5')).toBe('claude-haiku-4.5')
+  })
+})
+
+describe('resolveKiroModel discovered wire-id pass-through', () => {
+  test('routes a discovered-but-unmapped id once recorded, throws once cleared', () => {
+    const brandNew = 'claude-sonnet-7-preview'
+    clearDiscoveredWireIds()
+    expect(() => resolveKiroModel(brandNew)).toThrow('Unsupported model')
+
+    recordDiscoveredWireIds([{ modelId: brandNew }])
+    expect(resolveKiroModel(brandNew)).toBe(brandNew)
+
+    clearDiscoveredWireIds()
+    expect(() => resolveKiroModel(brandNew)).toThrow('Unsupported model')
+  })
+
+  test('resolveModelVariant parses an effort suffix on a discovered base and passes the base through', () => {
+    const base = 'claude-sonnet-7-preview'
+    clearDiscoveredWireIds()
+    recordDiscoveredWireIds([{ modelId: base }])
+    // Not in VARIANT_BASE_ALLOWLIST, so the whole id is treated as a wire id;
+    // but a known static effort-variant base still parses its suffix.
+    expect(resolveModelVariant(base).wireId).toBe(base)
+    expect(resolveModelVariant(base).effort).toBeUndefined()
+    clearDiscoveredWireIds()
   })
 })

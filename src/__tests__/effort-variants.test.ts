@@ -239,19 +239,23 @@ describe('buildEffortRequestFields — per-model wire shape dispatch', () => {
     }
   })
 
-  test('Claude models use output_config.effort', () => {
+  test('Claude models ship the adaptive thinking block with output_config.effort', () => {
     for (const wire of [
       'claude-opus-5',
       'claude-opus-4.8',
       'claude-sonnet-5',
       'claude-sonnet-4.6'
     ]) {
-      expect(buildEffortRequestFields(wire, 'high')).toEqual({ output_config: { effort: 'high' } })
+      expect(buildEffortRequestFields(wire, 'high')).toEqual({
+        thinking: { type: 'adaptive', display: 'summarized' },
+        output_config: { effort: 'high' }
+      })
     }
   })
 
-  test('unknown/non-GPT model defaults to Claude output_config shape', () => {
+  test('unknown/non-GPT model defaults to the Claude thinking + output_config shape', () => {
     expect(buildEffortRequestFields('some-future-model', 'low')).toEqual({
+      thinking: { type: 'adaptive', display: 'summarized' },
       output_config: { effort: 'low' }
     })
   })

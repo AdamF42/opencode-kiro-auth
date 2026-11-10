@@ -165,6 +165,111 @@ describe('auth account management', () => {
     ])
   })
 
+  test('initialize forces a live usage refresh (bypasses cooldown + leader lock)', async () => {
+    const account: FakeAccount = {
+      id: 'healthy',
+      email: 'healthy@example.com',
+      usedCount: 42,
+      limitCount: 100,
+      isHealthy: true,
+      region: 'us-east-1'
+    }
+    const { handler } = makeHandler([account])
+    const calls: Array<{ force?: boolean } | undefined> = []
+    handler.setAccountRefreshService({
+      refreshAll: async (options?: { force?: boolean }) => {
+        calls.push(options)
+        return makeSummary(account, 0)
+      },
+      refreshAccount: async () => {
+        throw new Error('not expected')
+      }
+    } as any)
+
+    await handler.initialize()
+
+    expect(calls).toEqual([{ force: true }])
+  })
+
+  test('initialize({ syncKiroCli: false }) skips kiro-cli sync but still force-refreshes usage', async () => {
+    let syncCalls = 0
+    mock.module('../plugin/sync/kiro-cli.js', () => ({
+      syncFromKiroCli: async () => {
+        syncCalls++
+        return { imported: 0, markedUnhealthy: 0 }
+      }
+    }))
+
+    const account: FakeAccount = {
+      id: 'healthy',
+      email: 'healthy@example.com',
+      usedCount: 42,
+      limitCount: 100,
+      isHealthy: true,
+      region: 'us-east-1'
+    }
+    // auto_sync_kiro_cli is enabled, so only the syncKiroCli:false option can
+    // suppress the kiro-cli sync — this proves the TUI entry does not re-sync.
+    const handler = new AuthHandler({ auto_sync_kiro_cli: true } as any, {} as any)
+    handler.setAccountManager({
+      getAccounts: () => [account],
+      removeAccount: () => {}
+    })
+    const calls: Array<{ force?: boolean } | undefined> = []
+    handler.setAccountRefreshService({
+      refreshAll: async (options?: { force?: boolean }) => {
+        calls.push(options)
+        return makeSummary(account, 0)
+      },
+      refreshAccount: async () => {
+        throw new Error('not expected')
+      }
+    } as any)
+
+    await handler.initialize(undefined, { syncKiroCli: false })
+
+    expect(syncCalls).toBe(0)
+    expect(calls).toEqual([{ force: true }])
+  })
+
+  test('load-time usage summary skips unhealthy accounts', async () => {
+    jest.useFakeTimers()
+    const { handler } = makeHandler([
+      {
+        id: 'healthy',
+        email: 'healthy@example.com',
+        usedCount: 10,
+        limitCount: 100,
+        isHealthy: true,
+        region: 'us-east-1'
+      },
+      {
+        id: 'stale',
+        email: 'healthy@example.com',
+        usedCount: 99,
+        limitCount: 100,
+        isHealthy: false,
+        region: 'us-east-1'
+      }
+    ])
+    const toasts: Array<{ message: string; variant: string }> = []
+
+    // logUsageSummary runs inside initialize; no refresh service wired so the
+    // fetch step is a no-op and only the display filter is exercised.
+    await handler.initialize((message, variant) => {
+      toasts.push({ message, variant })
+    })
+    jest.advanceTimersByTime(3000)
+
+    // Only the single healthy account produces a toast (not aggregated).
+    expect(toasts).toEqual([
+      {
+        message: 'Kiro usage (healthy@example.com): 10/100 (10%)',
+        variant: 'info'
+      }
+    ])
+  })
+
   test('first login label includes existing accounts + usage summary', () => {
     const { handler } = makeHandler([
       {

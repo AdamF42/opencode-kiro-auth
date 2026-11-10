@@ -27,6 +27,19 @@ import {
  * `false` (the default, and what `stream_recovery_mode: 'off'` must pass) to get
  * byte-identical output to the historical path.
  */
+/**
+ * A `reasoningContentEvent` run is "meaningful" once it carries at least one
+ * alphanumeric character. Backings like `auto` emit a trivial stub (e.g. an
+ * ellipsis `"..."`, the ~3-char run observed in probes) while narrating the
+ * real chain-of-thought as plain assistant content; opening a thinking block
+ * for that stub surfaces an empty "Thought" in the UI. Genuine reasoning always
+ * contains words, so an alphanumeric test cleanly separates the two without
+ * truncating short-but-real reasoning like "Let me think".
+ */
+function isMeaningfulReasoning(text: string): boolean {
+  return /[\p{L}\p{N}]/u.test(text)
+}
+
 export async function* transformSdkStream(
   sdkResponse: any,
   model: string,
@@ -75,8 +88,17 @@ export async function* transformSdkStream(
   // contiguous run BEFORE `assistantResponseEvent.content`; no `<thinking>` tags emitted.
   // `signature` and `redactedContent` are never rendered, but they ARE captured by the
   // accumulator — a trailing signature-only event carries the token for the whole run.
+  //
+  // Some backings (notably `auto`, and opus-4.7 in some regions) emit a stub
+  // reasoning run of only a few characters while narrating the real chain-of-thought
+  // as plain assistant content. Opening a thinking block for that stub surfaces an
+  // empty "Thought" in the UI. So reasoning text is buffered and the thinking block is
+  // not opened until the run carries meaningful (non-trivial) reasoning. A run that
+  // never crosses the threshold emits no thinking block at all.
   let reasoningStarted = false
   let reasoningClosed = false
+  let reasoningBuffer = ''
+  let reasoningEmitted = false
 
   const eventStream = sdkResponse.generateAssistantResponseResponse
   if (!eventStream) {
@@ -96,12 +118,30 @@ export async function* transformSdkStream(
           // The stopped thinking index cannot be reused, so open a fresh one.
           streamState.thinkingBlockIndex = null
           reasoningClosed = false
+          reasoningEmitted = false
+          reasoningBuffer = ''
         }
-        reasoningStarted = true
-        observer?.noteReasoningStarted()
-        for (const ev of createThinkingDeltaEvents(reasoningText, streamState)) {
-          const _c = convertToOpenAI(ev, conversationId, model)
-          if (_c !== null) yield _c
+
+        if (reasoningEmitted) {
+          // Threshold already crossed on this run: stream subsequent deltas live.
+          for (const ev of createThinkingDeltaEvents(reasoningText, streamState)) {
+            const _c = convertToOpenAI(ev, conversationId, model)
+            if (_c !== null) yield _c
+          }
+        } else {
+          // Still buffering: hold text until the run proves it carries meaningful
+          // reasoning, so a trivial stub never opens a (visually empty) thinking block.
+          reasoningBuffer += reasoningText
+          if (isMeaningfulReasoning(reasoningBuffer)) {
+            reasoningStarted = true
+            reasoningEmitted = true
+            observer?.noteReasoningStarted()
+            for (const ev of createThinkingDeltaEvents(reasoningBuffer, streamState)) {
+              const _c = convertToOpenAI(ev, conversationId, model)
+              if (_c !== null) yield _c
+            }
+            reasoningBuffer = ''
+          }
         }
       }
       continue
