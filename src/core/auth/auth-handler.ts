@@ -43,11 +43,24 @@ export class AuthHandler {
     private repository: AccountRepository
   ) {}
 
-  async initialize(showToast?: ToastFunction): Promise<void> {
-    const { syncFromKiroCli } = await import('../../plugin/sync/kiro-cli.js')
+  /**
+   * Seed accounts and surface a fresh usage summary at plugin load.
+   *
+   * `opts.syncKiroCli` (default `true`) controls the kiro-cli import block. The
+   * v1 auth loader and the v2 server `setup` keep the default so the sync runs
+   * once per process; the v2 TUI entry passes `false` so it does NOT re-run the
+   * sync the server entry already performs in the same process — it still runs
+   * the usage snapshot + summary so the TUI toast surface shows live usage.
+   */
+  async initialize(showToast?: ToastFunction, opts?: { syncKiroCli?: boolean }): Promise<void> {
+    const syncKiroCli = opts?.syncKiroCli ?? true
 
-    logger.log('Auth init', { autoSyncKiroCli: !!this.config.auto_sync_kiro_cli })
-    if (this.config.auto_sync_kiro_cli) {
+    logger.log('Auth init', {
+      autoSyncKiroCli: !!this.config.auto_sync_kiro_cli,
+      syncKiroCli
+    })
+    if (syncKiroCli && this.config.auto_sync_kiro_cli) {
+      const { syncFromKiroCli } = await import('../../plugin/sync/kiro-cli.js')
       logger.log('Kiro CLI sync: start')
       await syncFromKiroCli()
       this.repository.invalidateCache()
@@ -58,7 +71,39 @@ export class AuthHandler {
       logger.log('Kiro CLI sync: done', { importedAccounts: accounts.length })
     }
 
+    await this.refreshUsageSnapshot()
     this.logUsageSummary(showToast)
+  }
+
+  /**
+   * Fetch a fresh per-account usage snapshot (token refresh if needed +
+   * `getUsageLimits` + persist) so the load-time summary reflects real quota
+   * instead of stale/zero DB counters. The account refresh service is injected
+   * via `setAccountRefreshService`; when it is absent (e.g. a bare unit test)
+   * this is a no-op. Failures are swallowed: a usage snapshot must never block
+   * or break plugin startup. The refresh is forced (`{ force: true }`) so every
+   * process that opens shows live usage on terminal open: force bypasses the
+   * per-account cooldown and the keep-alive leader lock (otherwise non-leader
+   * processes return `lock_unavailable` with no fetch and print nothing). The
+   * service still bounds itself with a deadline, so an unresponsive endpoint
+   * cannot hang startup.
+   */
+  private async refreshUsageSnapshot(): Promise<void> {
+    if (!this.accountRefreshService) return
+    try {
+      const summary = await this.accountRefreshService.refreshAll({ force: true })
+      logger.log('Kiro usage snapshot at load', {
+        totalAccounts: summary.totalAccounts,
+        usageUpdated: summary.usageUpdated,
+        failed: summary.failed,
+        timedOut: summary.timedOut,
+        ...(summary.skippedReason ? { skippedReason: summary.skippedReason } : {})
+      })
+    } catch (error) {
+      logger.warn('Kiro usage snapshot at load failed', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   private logUsageSummary(showToast?: ToastFunction): void {
@@ -72,6 +117,7 @@ export class AuthHandler {
     }> = []
 
     for (const acc of accounts) {
+      if (acc.isHealthy === false) continue
       const used = acc.usedCount ?? 0
       const limit = acc.limitCount ?? 0
       if (limit > 0) {

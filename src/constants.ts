@@ -38,7 +38,15 @@ export function extractRegionFromArn(arn: string | undefined): KiroRegion | unde
 export const KIRO_CONSTANTS = {
   REFRESH_URL: 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken',
   REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',
-  BASE_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
+  /**
+   * Chat runtime host. AWS retired `q.{{region}}.amazonaws.com` for
+   * generateAssistantResponse: it now answers 403 FEATURE_NOT_SUPPORTED
+   * ("This version of Kiro is no longer supported"). kiro-cli 3.1.0
+   * (KAS) moved to `runtime.{{region}}.kiro.dev`, which accepts the same
+   * body and headers.
+   */
+  BASE_URL: 'https://runtime.{{region}}.kiro.dev/generateAssistantResponse',
+  /** Usage limits stayed on the legacy q.* host. */
   USAGE_LIMITS_URL: 'https://q.{{region}}.amazonaws.com/getUsageLimits',
   DEFAULT_REGION: 'us-east-1' as KiroRegion,
   AXIOS_TIMEOUT: 120000,
@@ -49,10 +57,45 @@ export const KIRO_CONSTANTS = {
   ORIGIN_AI_EDITOR: 'AI_EDITOR'
 }
 
+/**
+ * Kiro management-plane (ListAvailableModels) wire facts, verified against
+ * kiro-cli v2.10.0. These are the control-plane equivalents of the chat-path
+ * constants above and are deliberately SEPARATE: the discovery call uses the
+ * `KIRO_CLI` origin and the `management.{region}.kiro.dev` host, NOT the
+ * `AI_EDITOR` origin or `runtime.{region}.kiro.dev` chat host. Centralized here
+ * (never inlined at call sites) per AGENTS.md §4/§6.
+ */
+const KIRO_MANAGEMENT_CLI_VERSION = '2.10.0'
+const KIRO_MANAGEMENT_SDK_API_VERSION = '0.1.16551'
+const KIRO_MANAGEMENT_OS =
+  process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux'
+
+export const KIRO_MANAGEMENT = {
+  /** Region-templated control-plane endpoint (mirrors BASE_URL templating). */
+  URL: 'https://management.{{region}}.kiro.dev/',
+  /** awsJson1.0 operation target header value. */
+  LIST_MODELS_TARGET: 'AmazonCodeWhispererService.ListAvailableModels',
+  CONTENT_TYPE: 'application/x-amz-json-1.0',
+  /** Discovery-call origin — distinct from the chat-path ORIGIN_AI_EDITOR. */
+  ORIGIN: 'KIRO_CLI',
+  /** Management user-agent, matching kiro-cli's codewhispererruntime UA. */
+  USER_AGENT: `aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererruntime/${KIRO_MANAGEMENT_SDK_API_VERSION} os/${KIRO_MANAGEMENT_OS} lang/rust/1.92.0 md/appVersion-${KIRO_MANAGEMENT_CLI_VERSION} app/AmazonQ-For-CLI`,
+  /** Request/response pagination cap (runaway nextToken guard). */
+  MAX_PAGES: 10,
+  /** Per-request network timeout. */
+  TIMEOUT_MS: 15000
+} as const
+
 export const MODEL_MAPPING: Record<string, string> = {
+  // Claude Haiku 5.5
+  'claude-haiku-5-5': 'claude-haiku-5.5',
+  'claude-haiku-5-5-thinking': 'claude-haiku-5.5',
   // Claude Haiku
   'claude-haiku-4-5': 'claude-haiku-4.5',
   'claude-haiku-4-5-thinking': 'claude-haiku-4.5',
+  // Claude Sonnet 5.5
+  'claude-sonnet-5-5': 'claude-sonnet-5.5',
+  'claude-sonnet-5-5-thinking': 'claude-sonnet-5.5',
   // Claude Sonnet
   'claude-sonnet-4': 'claude-sonnet-4',
   'claude-sonnet-4-5': 'claude-sonnet-4.5',
@@ -66,6 +109,9 @@ export const MODEL_MAPPING: Record<string, string> = {
   // Wire id has no dot suffix and no .0/-1m variants (probe-confirmed; those 400).
   'claude-sonnet-5': 'claude-sonnet-5',
   'claude-sonnet-5-thinking': 'claude-sonnet-5',
+  // Claude Opus 5.5
+  'claude-opus-5-5': 'claude-opus-5.5',
+  'claude-opus-5-5-thinking': 'claude-opus-5.5',
   // Claude Opus
   'claude-opus-4-5': 'claude-opus-4.5',
   'claude-opus-4-5-thinking': 'claude-opus-4.5',
@@ -116,28 +162,34 @@ export function isLongContextModel(model: string): boolean {
 export const DEFAULT_MODEL_CONTEXT_LIMIT = 200000
 
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  auto: 200000,
+  // Live values from the management API `ListAvailableModels` (2026-11-10):
+  // tokenLimits.maxInputTokens is authoritative; discovery overrides this table
+  // at runtime for any model it returns (see getContextWindowSize).
+  auto: 1000000,
   'claude-haiku-4-5': 200000,
+  'claude-haiku-5-5': 1000000,
   'claude-sonnet-4': 200000,
   'claude-sonnet-4-5': 200000,
   'claude-sonnet-4-5-1m': 1000000,
   'claude-sonnet-4-6': 1000000,
   'claude-sonnet-4-6-1m': 1000000,
   'claude-sonnet-5': 1000000,
+  'claude-sonnet-5-5': 1000000,
   'claude-opus-4-5': 200000,
   'claude-opus-4-6': 1000000,
   'claude-opus-4-6-1m': 1000000,
   'claude-opus-4-7': 1000000,
   'claude-opus-4-8': 1000000,
   'claude-opus-5': 1000000,
+  'claude-opus-5-5': 1000000,
   'deepseek-3.2': 128000,
   'glm-5': 200000,
-  'minimax-m2.5': 200000,
-  'minimax-m2.1': 200000,
+  'minimax-m2.5': 196000,
+  'minimax-m2.1': 196000,
   'qwen3-coder-next': 256000,
-  'gpt-5.6-sol': 272000,
-  'gpt-5.6-terra': 272000,
-  'gpt-5.6-luna': 272000
+  'gpt-5.6-sol': 986000,
+  'gpt-5.6-terra': 986000,
+  'gpt-5.6-luna': 986000
 }
 
 export function getModelContextLimit(baseModel: string): number {

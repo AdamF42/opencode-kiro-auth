@@ -3307,11 +3307,10 @@ describe('RequestHandler.handle — re-auth path', () => {
     const dead = makeAccount({ id: 'A', isHealthy: false, unhealthyReason: 'HTTP_403' })
     const revived = makeAccount({ id: 'A' })
 
-    const authorize = mock(async () => {})
-    const callback = mock(async () => {})
+    const reauthorize = mock(async () => {})
     const invalidateCache = mock(() => {})
     const findAll = mock(async () => [revived])
-    const client = { provider: { oauth: { authorize, callback } } }
+    const client = { reauthorize }
 
     const accounts = [dead]
     const accountManager: any = {
@@ -3348,8 +3347,7 @@ describe('RequestHandler.handle — re-auth path', () => {
     const res = await handler.handle(KIRO_URL, { body: JSON.stringify({}) }, noToast)
 
     expect(res).toBeInstanceOf(Response)
-    expect(authorize).toHaveBeenCalledTimes(1)
-    expect(callback).toHaveBeenCalledTimes(1)
+    expect(reauthorize).toHaveBeenCalledTimes(1)
     expect(invalidateCache).toHaveBeenCalledTimes(1)
     expect(sdkSend).toHaveBeenCalledTimes(1)
   })

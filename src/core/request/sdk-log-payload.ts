@@ -35,7 +35,7 @@ export function buildSdkRequestLogPayload(
   const history = prep.conversationState.history
   const historyReasoning = summarizeHistoryReasoning(history)
   return {
-    url: `https://q.${prep.region}.amazonaws.com/generateAssistantResponse`,
+    url: `https://runtime.${prep.region}.kiro.dev/generateAssistantResponse`,
     method: 'POST',
     headers: { 'x-amzn-kiro-agent-mode': 'vibe' },
     body: {

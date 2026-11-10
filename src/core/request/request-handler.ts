@@ -19,10 +19,16 @@ import {
   type StreamTerminalSource
 } from '../../plugin/streaming/stream-observer'
 import { syncFromKiroCli } from '../../plugin/sync/kiro-cli'
-import type { KiroAuthDetails, ManagedAccount, SdkPreparedRequest } from '../../plugin/types'
+import type {
+  Effort,
+  KiroAuthDetails,
+  ManagedAccount,
+  SdkPreparedRequest
+} from '../../plugin/types'
 import { AccountRefreshService } from '../account/account-refresh-service'
 import { AccountSelector } from '../account/account-selector'
 import { UsageTracker } from '../account/usage-tracker'
+import type { KiroReauthDriver } from '../auth/reauth-driver'
 import { TokenRefresher } from '../auth/token-refresher'
 import { ErrorHandler, isKiroContextOverflowBody, type RequestContext } from './error-handler'
 import { RecoveryAttemptFactory } from './recovery-attempt'
@@ -66,7 +72,31 @@ export {
 
 type ToastFunction = (message: string, variant: 'info' | 'warning' | 'success' | 'error') => void
 
-const KIRO_API_PATTERN = /^(https?:\/\/)?q\.[a-z0-9-]+\.amazonaws\.com/
+const VALID_EFFORT_LEVELS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+
+/**
+ * Extract a reasoning-effort level from an inbound request body. OpenCode's
+ * openai-compatible provider forwards a selected model variant's options in the
+ * body; the effort knob arrives as `reasoningEffort` (camelCase) or, defensively,
+ * `reasoning_effort` (snake_case). Only values in the known effort enum are
+ * accepted; anything else yields undefined so the caller falls back to config.
+ */
+export function extractBodyEffort(body: any): Effort | undefined {
+  const raw = body?.reasoningEffort ?? body?.reasoning_effort
+  if (typeof raw === 'string' && VALID_EFFORT_LEVELS.has(raw)) {
+    return raw as Effort
+  }
+  return undefined
+}
+
+/**
+ * Chat requests intercepted by the plugin. The v2 adapter synthesizes the URL
+ * from KIRO_CONSTANTS.BASE_URL (`runtime.{region}.kiro.dev`); the legacy
+ * `q.{region}.amazonaws.com` form is still accepted so stale in-flight hosts
+ * and old tests keep matching.
+ */
+const KIRO_API_PATTERN =
+  /^(https?:\/\/)?(?:q\.[a-z0-9-]+\.amazonaws\.com|runtime\.[a-z0-9-]+\.kiro\.dev)/
 const REAUTH_FAILURE_COOLDOWN_MS = 60000
 type UpstreamWaitPhase = 'SDK response' | 'stream event'
 type RequestTerminalLogDetails = Readonly<Record<string, unknown>> & {
@@ -104,7 +134,7 @@ export class RequestHandler {
     private accountManager: AccountManager,
     private config: KiroConfig,
     private repository: AccountRepository,
-    private client?: any
+    private reauthDriver?: KiroReauthDriver
   ) {
     this.tokenRefresher = new TokenRefresher(config, accountManager, syncFromKiroCli, repository)
     this.accountRefreshService = new AccountRefreshService(
@@ -137,6 +167,10 @@ export class RequestHandler {
 
   get sharedAccountRefreshService(): AccountRefreshService {
     return this.accountRefreshService
+  }
+
+  get sharedAccountSelector(): AccountSelector {
+    return this.accountSelector
   }
 
   async handle(input: any, init: any, showToast: ToastFunction): Promise<Response> {
@@ -271,7 +305,8 @@ export class RequestHandler {
         think,
         budget,
         showToast,
-        disableReasoningReplay
+        disableReasoningReplay,
+        extractBodyEffort(body)
       )
       semanticSnapshot = createRecoverySemanticSnapshot(
         transformed,
@@ -913,10 +948,15 @@ export class RequestHandler {
     think: boolean,
     budget: number,
     showToast?: (message: string, variant: 'info' | 'warning' | 'success' | 'error') => void,
-    disableReasoningReplay = false
+    disableReasoningReplay = false,
+    bodyEffort?: Effort
   ): SdkPreparedRequest {
     return transformToSdkRequest(body, model, auth, think, budget, showToast, {
-      effort: this.config.effort,
+      // Precedence for a non-suffix model id: a cycled OpenCode variant's
+      // reasoningEffort (delivered in the request body) wins over the static
+      // config.effort. A model-id effort suffix still wins over both — that is
+      // resolved inside transformToSdkRequest via variantEffort.
+      effort: bodyEffort ?? this.config.effort,
       autoEffortMapping: this.config.auto_effort_mapping,
       disableReasoningReplay
     })
@@ -961,7 +1001,7 @@ export class RequestHandler {
     if (!this.config.enable_log_api_request) {
       logger.logApiError(
         {
-          url: `https://q.${prep.region}.amazonaws.com/generateAssistantResponse`,
+          url: `https://runtime.${prep.region}.kiro.dev/generateAssistantResponse`,
           method: 'POST',
           headers: {},
           body: null,
@@ -978,7 +1018,7 @@ export class RequestHandler {
   }
 
   private async triggerReauth(showToast: ToastFunction): Promise<boolean> {
-    if (!this.client) return false
+    if (!this.reauthDriver) return false
 
     const cooldownRemaining = REAUTH_FAILURE_COOLDOWN_MS - (Date.now() - this.lastFailedReauthAt)
     if (cooldownRemaining > 0) {
@@ -1004,15 +1044,7 @@ export class RequestHandler {
   private async performReauth(showToast: ToastFunction): Promise<boolean> {
     try {
       showToast('Session expired. Re-authenticating...', 'warning')
-      await this.client.provider.oauth.authorize({
-        path: { id: 'kiro-auth' },
-        body: { method: 0 }
-      })
-
-      await this.client.provider.oauth.callback({
-        path: { id: 'kiro-auth' },
-        body: { method: 0 }
-      })
+      await this.reauthDriver!.reauthorize()
 
       this.repository.invalidateCache()
       const accounts = await this.repository.findAll()
