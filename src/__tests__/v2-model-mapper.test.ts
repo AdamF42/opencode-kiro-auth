@@ -89,6 +89,25 @@ describe('mapCatalogToModelInfo', () => {
     const m = byId.get('claude-sonnet-5')!
     expect(m.capabilities.input).not.toBe(KIRO_MODEL_CATALOG['claude-sonnet-5']!.modalities.input)
   })
+
+  test('maps effort levels to variants with reasoningEffort body overlay', () => {
+    const m = byId.get('claude-opus-5')!
+    expect(m.variants.map((v) => String(v.id))).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    for (const v of m.variants) {
+      expect(v.body).toEqual({ reasoningEffort: String(v.id) })
+    }
+  })
+
+  test('4-level effort model omits xhigh variant', () => {
+    const m = byId.get('claude-sonnet-4-6')!
+    expect(m.variants.map((v) => String(v.id))).toEqual(['low', 'medium', 'high', 'max'])
+  })
+
+  test('models without catalog variants have no variants', () => {
+    for (const id of ['auto', 'glm-5', 'claude-sonnet-4-5', 'deepseek-3.2']) {
+      expect(byId.get(id)!.variants).toEqual([])
+    }
+  })
 })
 
 describe('buildKiroProviderInfo', () => {

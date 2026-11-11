@@ -13,9 +13,20 @@ import { cloneKiroModelCatalog, type KiroModelCatalog } from '../model-catalog.j
  *   - `limit`          -> `limit` (context + output; input left unset)
  *   - `modalities.input`  -> `capabilities.input`  (preserves `pdf`)
  *   - `modalities.output` -> `capabilities.output`
+ *   - `variants`          -> `variants` (reasoning-effort levels)
  *
  * `capabilities.tools` keeps the schema default (`true`). The catalog is cloned
  * first so the returned structures never alias the module-level constant.
+ *
+ * The catalog stores variants as `Record<level, { reasoningEffort: level }>`
+ * (the v1 shape). v2 expects `Model.Info.variants` to be a `Model.Variant[]`,
+ * each `{ id, body? }`. Without this mapping every model is registered with the
+ * schema-default empty `variants: []`, so OpenCode's `variant.cycle` (`ctrl+t`)
+ * has nothing to cycle and the reasoning-effort selector never appears. Each
+ * level becomes a variant whose `body` overlay injects `reasoningEffort` into
+ * the outbound request body, which `RequestHandler.extractBodyEffort` reads
+ * (`body.reasoningEffort ?? body.reasoning_effort`) and threads into the SDK
+ * effort precedence. Models without catalog variants keep the empty default.
  */
 export function mapCatalogToModelInfo(
   providerID: string,
@@ -24,6 +35,12 @@ export function mapCatalogToModelInfo(
   const branded = Provider.ID.make(providerID)
   return Object.entries(catalog).map(([modelID, definition]) => {
     const base = Model.Info.default(branded, Model.ID.make(modelID))
+    const variants = definition.variants
+      ? Object.entries(definition.variants).map(([level, variant]) => ({
+          id: Model.VariantID.make(level),
+          body: { reasoningEffort: variant.reasoningEffort }
+        }))
+      : base.variants
     return {
       ...base,
       name: definition.name,
@@ -32,6 +49,7 @@ export function mapCatalogToModelInfo(
         input: [...definition.modalities.input],
         output: [...definition.modalities.output]
       },
+      variants,
       limit: {
         ...base.limit,
         context: definition.limit.context,
